@@ -46,7 +46,9 @@ class ServerlessPlugin {
     const validateSubs = Object.entries(functions).flatMap(
       async ([fnName, fnDef]) => {
         if (fnDef.setDlq !== false) {
-          const snsEvents = (fnDef.events || []).map((evt) => evt.sns);
+          const snsEvents = (fnDef.events || [])
+            .filter((evt) => evt.sns)
+            .map((evt) => evt.sns);
 
           await snsEvents.forEach((snsEvent) => {
             this._addSQSDeadLetter(template, fnName, fnDef, snsEvents);
