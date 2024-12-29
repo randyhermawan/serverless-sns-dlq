@@ -43,24 +43,20 @@ class ServerlessPlugin {
     const template =
       this.serverless.service.provider.compiledCloudFormationTemplate;
 
-    const validateSubs = Object.entries(functions).flatMap(
+    Object.entries(functions).flatMap(
       async ([fnName, fnDef]) => {
         if (fnDef.setDlq !== false) {
           const snsEvents = (fnDef.events || [])
             .filter((evt) => evt.sns)
             .map((evt) => evt.sns);
 
-          await snsEvents.forEach((snsEvent) => {
-            this._addSQSDeadLetter(template, fnName, fnDef, snsEvents);
-          });
+          if (snsEvents.length > 0) this._configure(template, fnName, fnDef, snsEvents);
         }
       }
     );
-
-    await Promise.all(validateSubs);
   };
 
-  _addSQSDeadLetter = (template, fnName, fnDef, snsEvents) => {
+  _configure = (template, fnName, fnDef, snsEvents) => {
     const accountId = (snsEvents[0].arn || snsEvents[0]).split(":")[4];
 
     const dlqName = `${fnDef.name}-dlq`;
@@ -69,6 +65,7 @@ class ServerlessPlugin {
     const dlqArn = `arn:aws:sqs:${this.region}:${accountId}:${dlqName}`;
     const dlqUrl = `https://sqs.${this.region}.amazonaws.com/${accountId}/${dlqName}`;
 
+    // Define SQS DeadLetterQueue for the function
     const queueId = pascalCase(`${fnName}SQSDeadLetterQueue`);
     const queueDef = {
       Type: "AWS::SQS::Queue",
@@ -76,6 +73,7 @@ class ServerlessPlugin {
     };
     template.Resources[queueId] = queueDef;
 
+    // Add DLQ_QUEUE_URL automatically to the function environment variables
     const funcId = pascalCase(`${fnName}LambdaFunction`);
     const funcDef = template.Resources[funcId];
 
@@ -86,54 +84,37 @@ class ServerlessPlugin {
 
     template.Resources[funcId] = funcDef;
 
-    const CHUNK_SIZE = 10;
+    // Update redrive policy to each SNS subscriptions
+    const arns = [];
+    snsEvents.forEach((sns) => {
+      const snsSubId = pascalCase(`${fnName}SnsSubscription${(sns.arn || sns).split(":").pop()}`);
 
-    for (let i = 0; i < snsEvents.length; i += CHUNK_SIZE) {
-      const queuePolicyId = pascalCase(
-        `${fnName}SQSDeadLetterQueuePolicyIter${i}`
-      );
-      const policyStatements = [];
+      const snsSubDef = template.Resources[snsSubId];
+      snsSubDef.Properties["RedrivePolicy"] = { deadLetterTargetArn: dlqArn };
 
-      const chunk = snsEvents.slice(i, i + CHUNK_SIZE);
-      chunk.forEach((sns) => {
-        if (sns.setDlq !== false) {
-          const snsSubId = pascalCase(
-            `${fnName}SnsSubscription${(sns.arn || sns).split(":").pop()}`
-          );
+      template.Resources[snsSubId] = snsSubDef;
+      arns.push(sns.arn || sns)
+    })
 
-          const snsSubDef = template.Resources[snsSubId];
-          snsSubDef.Properties["RedrivePolicy"] = {
-            deadLetterTargetArn: dlqArn,
-          };
-
-          template.Resources[snsSubId] = snsSubDef;
-
-          policyStatements.push({
+    // Attach queue policy to the DLQ
+    const queuePolicyId = pascalCase(`${fnName}SQSDeadLetterQueuePolicy`);
+    template.Resources[queuePolicyId] = {
+      Type: "AWS::SQS::QueuePolicy",
+      Properties: {
+        Queues: [{ Ref: queueId }],
+        PolicyDocument: {
+          Version: "2012-10-17",
+          Statement: {
             Effect: "Allow",
             Principal: { Service: "sns.amazonaws.com" },
             Action: "sqs:SendMessage",
             Resource: { "Fn::GetAtt": [queueId, "Arn"] },
-            Condition: { ArnEquals: { "aws:SourceArn": sns.arn || sns } },
-          });
-        }
-      });
-
-      if (policyStatements.length > 0) {
-        const queuePolicyDef = {
-          Type: "AWS::SQS::QueuePolicy",
-          Properties: {
-            Queues: [{ Ref: queueId }],
-            PolicyDocument: {
-              Version: "2012-10-17",
-              Statement: policyStatements,
-            },
+            Condition: { ArnEquals: { "aws:SourceArn": arns } },
           },
-        };
-
-        template.Resources[queuePolicyId] = queuePolicyDef;
-      }
+        },
+      },
     }
-  };
+  }
 }
 
 module.exports = ServerlessPlugin;
