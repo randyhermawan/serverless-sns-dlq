@@ -1,6 +1,6 @@
 {
   "name": "serverless-sns-dlq",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Automatically attach SNS redrive policy to DLQ for every handler function specified with SNS trigger",
   "main": "index.js",
   "author": "Randy Hermawan",

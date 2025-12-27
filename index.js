@@ -20,12 +20,12 @@ class ServerlessPlugin {
 
     serverless.configSchemaHandler.defineFunctionProperties("aws", {
       type: "object",
-      properties: { setDlq: { type: "boolean" } },
+      properties: { enableSnsDlq: { type: "boolean" } },
     });
 
     serverless.configSchemaHandler.defineFunctionEventProperties("aws", "sns", {
       type: "object",
-      properties: { setDlq: { type: "boolean" } },
+      properties: { enableSnsDlq: { type: "boolean" } },
     });
   }
 
@@ -39,26 +39,25 @@ class ServerlessPlugin {
   };
 
   Deploy = async () => {
+    const accountId = await this.serverless.getProvider("aws").getAccountId();
     const functions = this.serverless.service.functions;
     const template =
       this.serverless.service.provider.compiledCloudFormationTemplate;
 
     Object.entries(functions).flatMap(
       async ([fnName, fnDef]) => {
-        if (fnDef.setDlq !== false) {
+        if (fnDef.enableSnsDlq !== false) {
           const snsEvents = (fnDef.events || [])
             .filter((evt) => evt.sns)
             .map((evt) => evt.sns);
 
-          if (snsEvents.length > 0) this._configure(template, fnName, fnDef, snsEvents);
+          if (snsEvents.length > 0) this._configure(accountId, template, fnName, fnDef, snsEvents);
         }
       }
     );
   };
 
-  _configure = (template, fnName, fnDef, snsEvents) => {
-    const accountId = (snsEvents[0].arn || snsEvents[0]).split(":")[4];
-
+  _configure = (accountId, template, fnName, fnDef, snsEvents) => {
     const dlqName = `${fnDef.name}-dlq`;
     this._validateQueueName(dlqName);
 
