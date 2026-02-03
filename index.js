@@ -14,6 +14,7 @@ class ServerlessPlugin {
 
     this.hooks = {
       "before:deploy:deploy": this.Deploy.bind(this),
+      "before:deploy:function:packageFunction": this.DeploySingleFunction.bind(this),
     };
 
     this.region = serverless.getProvider("aws").getRegion();
@@ -55,6 +56,37 @@ class ServerlessPlugin {
         }
       }
     );
+  };
+
+  DeploySingleFunction = async () => {
+    const fnName = this.options.function;
+    const fnDef = this.serverless.service.functions[fnName];
+
+    if (!fnDef) {
+      this.logger.error(`Function ${fnName} not found`);
+      return;
+    }
+
+    // Skip if SNS DLQ is explicitly disabled
+    if (fnDef.enableSnsDlq === false) return;
+
+    // Check if function has SNS events
+    const snsEvents = (fnDef.events || [])
+      .filter((evt) => evt.sns)
+      .map((evt) => evt.sns);
+
+    if (snsEvents.length === 0) return;
+
+    // Calculate DLQ URL
+    const accountId = await this.serverless.getProvider("aws").getAccountId();
+    const dlqName = `${fnDef.name}-dlq`;
+    const dlqUrl = `https://sqs.${this.region}.amazonaws.com/${accountId}/${dlqName}`;
+
+    // Add DLQ_QUEUE_URL to function environment
+    if (!fnDef.environment) fnDef.environment = {};
+    fnDef.environment.DLQ_QUEUE_URL = dlqUrl;
+
+    this.logger.notice(`Added DLQ_QUEUE_URL for function ${fnName}: ${dlqUrl}`);
   };
 
   _configure = (accountId, template, fnName, fnDef, snsEvents) => {
