@@ -85,8 +85,6 @@ class ServerlessPlugin {
     // Add DLQ_QUEUE_URL to function environment
     if (!fnDef.environment) fnDef.environment = {};
     fnDef.environment.DLQ_QUEUE_URL = dlqUrl;
-
-    this.logger.notice(`Added DLQ_QUEUE_URL for function ${fnName}: ${dlqUrl}`);
   };
 
   _configure = (accountId, template, fnName, fnDef, snsEvents) => {
@@ -135,16 +133,40 @@ class ServerlessPlugin {
         Queues: [{ Ref: queueId }],
         PolicyDocument: {
           Version: "2012-10-17",
-          Statement: {
-            Effect: "Allow",
-            Principal: { Service: "sns.amazonaws.com" },
-            Action: "sqs:SendMessage",
-            Resource: { "Fn::GetAtt": [queueId, "Arn"] },
-            Condition: { ArnEquals: { "aws:SourceArn": arns } },
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: { Service: "sns.amazonaws.com" },
+              Action: "sqs:SendMessage",
+              Resource: { "Fn::GetAtt": [queueId, "Arn"] },
+              Condition: { ArnEquals: { "aws:SourceArn": arns } },
+            },
+            {
+              Effect: "Allow",
+              Principal: { Service: "lambda.amazonaws.com" },
+              Action: "sqs:SendMessage",
+              Resource: { "Fn::GetAtt": [queueId, "Arn"] },
+              Condition: { ArnEquals: { "aws:SourceArn": { "Fn::GetAtt": [funcId, "Arn"] } } },
+            },
+          ],
+        },
+      },
+    };
+
+    // Add Lambda EventInvokeConfig for onFailure destination
+    const eventInvokeConfigId = pascalCase(`${fnName}EventInvokeConfig`);
+    template.Resources[eventInvokeConfigId] = {
+      Type: "AWS::Lambda::EventInvokeConfig",
+      Properties: {
+        FunctionName: { Ref: funcId },
+        Qualifier: "$LATEST",
+        DestinationConfig: {
+          OnFailure: {
+            Destination: { "Fn::GetAtt": [queueId, "Arn"] },
           },
         },
       },
-    }
+    };
   }
 }
 
